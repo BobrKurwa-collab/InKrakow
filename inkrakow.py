@@ -13,7 +13,6 @@ if sys.platform == "win32":
     import msvcrt
 else:
     import select
-    import fcntl
     import tty
     import termios
 
@@ -25,27 +24,12 @@ original_terminal_settings = None
 
 
 def setup_unix_input():
-    """Configure terminal for non-blocking character input on Unix/macOS."""
+    """Enable CBREAK mode on Unix/macOS so characters are available immediately."""
     global original_terminal_settings
     if sys.platform != "win32":
         try:
-            # Save original settings
             original_terminal_settings = termios.tcgetattr(sys.stdin)
-            # Set CBREAK mode: get characters immediately without needing Enter
-            # This is gentler than raw mode and preserves signal handling
-            fd = sys.stdin.fileno()
-            tty.setcbreak(fd)
-            # Set stdin to non-blocking mode only
-            flags = fcntl.fcntl(fd, fcntl.F_GETFL)
-            fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-            # ensure stdout remains blocking (in case underlying fd inherited)
-            try:
-                outfd = sys.stdout.fileno()
-                oflags = fcntl.fcntl(outfd, fcntl.F_GETFL)
-                if oflags & os.O_NONBLOCK:
-                    fcntl.fcntl(outfd, fcntl.F_SETFL, oflags & ~os.O_NONBLOCK)
-            except Exception:
-                pass
+            tty.setcbreak(sys.stdin.fileno())
         except Exception:
             pass
 
@@ -92,10 +76,12 @@ def get_direction_input() -> tuple or None:
                 mapping = {b'w': (0, -1), b's': (0, 1), b'a': (-1, 0), b'd': (1, 0)}
                 return mapping[key.lower()]
     else:
-        # Unix/macOS: read from stdin in non-blocking mode
+        # Unix/macOS: poll stdin with select (cbreak mode makes
+        # characters available immediately without needing Enter)
         try:
-            key = sys.stdin.read(1)
-            if key:
+            dr, _, _ = select.select([sys.stdin], [], [], 0)
+            if dr:
+                key = sys.stdin.read(1)
                 if key.lower() == 'w':
                     return (0, -1)
                 elif key.lower() == 's':
@@ -104,9 +90,7 @@ def get_direction_input() -> tuple or None:
                     return (-1, 0)
                 elif key.lower() == 'd':
                     return (1, 0)
-        except (IOError, OSError, EOFError):
-            # IOError/OSError: no data available in non-blocking mode
-            # EOFError: stdin closed (can happen in some terminal configs)
+        except Exception:
             pass
     return None
 
