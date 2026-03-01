@@ -14,9 +14,27 @@ if sys.platform == "win32":
 else:
     import tty
     import termios
+    import select
 
 from game_engine import Game, Scene, Position
 from visualization import ConsoleRenderer
+
+# Store original terminal settings for Unix systems
+original_terminal_settings = None
+
+
+def setup_unix_terminal():
+    """Configure terminal for raw input on Unix/macOS."""
+    global original_terminal_settings
+    if sys.platform != "win32":
+        original_terminal_settings = termios.tcgetattr(sys.stdin)
+        tty.setraw(sys.stdin.fileno())
+
+
+def restore_unix_terminal():
+    """Restore terminal settings on Unix/macOS."""
+    if sys.platform != "win32" and original_terminal_settings:
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, original_terminal_settings)
 
 
 def load_scene_from_json(json_path: str) -> Scene:
@@ -52,15 +70,11 @@ def get_direction_input() -> tuple or None:
                 mapping = {b'w': (0, -1), b's': (0, 1), b'a': (-1, 0), b'd': (1, 0)}
                 return mapping[key.lower()]
     else:
-        # Unix/Linux: non-blocking check for stdin characters
-        import select
-        if sys.stdin.readable():
+        # Unix/macOS: use select with 0 timeout for non-blocking read
+        try:
             dr, _, _ = select.select([sys.stdin], [], [], 0)
             if dr:
-                try:
-                    key = sys.stdin.read(1)
-                except Exception:
-                    return None
+                key = sys.stdin.read(1)
                 if key.lower() == 'w':
                     return (0, -1)
                 elif key.lower() == 's':
@@ -69,86 +83,95 @@ def get_direction_input() -> tuple or None:
                     return (-1, 0)
                 elif key.lower() == 'd':
                     return (1, 0)
+        except Exception:
+            pass
     return None
 
 
 def main():
     """Main game loop."""
-    # Find scenes directory
-    current_dir = Path(__file__).parent
-    scene_path = current_dir / "scenes" / "market_square.json"
+    # Setup terminal for Unix/macOS
+    setup_unix_terminal()
+    
+    try:
+        # Find scenes directory
+        current_dir = Path(__file__).parent
+        scene_path = current_dir / "scenes" / "market_square.json"
 
-    if not scene_path.exists():
-        print(f"Error: Scene file not found at {scene_path}")
-        sys.exit(1)
+        if not scene_path.exists():
+            print(f"Error: Scene file not found at {scene_path}")
+            sys.exit(1)
 
-    # Load scene
-    scene = load_scene_from_json(str(scene_path))
+        # Load scene
+        scene = load_scene_from_json(str(scene_path))
 
-    # Load game data from JSON
-    with open(scene_path, 'r') as f:
-        scene_data = json.load(f)
+        # Load game data from JSON
+        with open(scene_path, 'r') as f:
+            scene_data = json.load(f)
 
-    player_start = Position(
-        scene_data["player_start"]["x"],
-        scene_data["player_start"]["y"]
-    )
-    objective_pos = Position(
-        scene_data["objective"]["x"],
-        scene_data["objective"]["y"]
-    )
+        player_start = Position(
+            scene_data["player_start"]["x"],
+            scene_data["player_start"]["y"]
+        )
+        objective_pos = Position(
+            scene_data["objective"]["x"],
+            scene_data["objective"]["y"]
+        )
 
-    # create NPC objects if defined
-    npcs = []
-    if "npcs" in scene_data:
-        from game_engine import Policeman, Pigeon, Hobo
-        for entry in scene_data["npcs"]:
-            t = entry.get("type")
-            pos = Position(entry.get("x", 0), entry.get("y", 0))
-            if t == "policeman":
-                npcs.append(Policeman(pos))
-            elif t == "pigeon":
-                npcs.append(Pigeon(pos))
-            elif t == "hobo":
-                npcs.append(Hobo(pos))
+        # create NPC objects if defined
+        npcs = []
+        if "npcs" in scene_data:
+            from game_engine import Policeman, Pigeon, Hobo
+            for entry in scene_data["npcs"]:
+                t = entry.get("type")
+                pos = Position(entry.get("x", 0), entry.get("y", 0))
+                if t == "policeman":
+                    npcs.append(Policeman(pos))
+                elif t == "pigeon":
+                    npcs.append(Pigeon(pos))
+                elif t == "hobo":
+                    npcs.append(Hobo(pos))
 
-    # Initialize game
-    game = Game(scene, player_start, objective_pos, npcs)
+        # Initialize game
+        game = Game(scene, player_start, objective_pos, npcs)
 
-    print("=" * 60)
-    print("INKRAKOW - Drunken Adventures in Krakow")
-    print("=" * 60)
-    print("Controls: Use WASD keys to move")
-    print("Objective: Find your clothes (marked with *)")
-    print("=" * 60)
-    print()
+        print("=" * 60)
+        print("INKRAKOW - Drunken Adventures in Krakow")
+        print("=" * 60)
+        print("Controls: Use WASD keys to move")
+        print("Objective: Find your clothes (marked with *)")
+        print("=" * 60)
+        print()
 
-    # Main game loop
-    running = True
-    while running:
-        # Clear screen
-        os.system('cls' if sys.platform == "win32" else 'clear')
+        # Main game loop
+        running = True
+        while running:
+            # Clear screen
+            os.system('cls' if sys.platform == "win32" else 'clear')
 
-        # Get input (non-blocking)
-        direction = get_direction_input()
-        if direction:
-            game.move_player(direction)
+            # Get input (non-blocking)
+            direction = get_direction_input()
+            if direction:
+                game.move_player(direction)
 
-        # Update NPCs after player's action so status messages from movement remain visible
-        game.update_npcs()
+            # Update NPCs after player's action so status messages from movement remain visible
+            game.update_npcs()
 
-        # Render current state
-        print(ConsoleRenderer.render_with_info(game))
+            # Render current state
+            print(ConsoleRenderer.render_with_info(game))
 
-        if game.game_over:
-            if game.won:
-                print("\nВы собрали все свои вещи и успешно покинули Краков! Поздравляем, вы выиграли!")
-            running = False
-            break
+            if game.game_over:
+                if game.won:
+                    print("\nВы собрали все свои вещи и успешно покинули Краков! Поздравляем, вы выиграли!")
+                running = False
+                break
 
-        # Small delay to avoid CPU spinning
-        import time
-        time.sleep(0.05)
+            # Small delay to avoid CPU spinning
+            import time
+            time.sleep(0.05)
+    finally:
+        # Restore terminal settings
+        restore_unix_terminal()
 
 
 if __name__ == "__main__":
