@@ -33,10 +33,19 @@ def setup_unix_input():
             original_terminal_settings = termios.tcgetattr(sys.stdin)
             # Set CBREAK mode: get characters immediately without needing Enter
             # This is gentler than raw mode and preserves signal handling
-            tty.setcbreak(sys.stdin.fileno())
-            # Set stdin to non-blocking mode
-            flags = fcntl.fcntl(sys.stdin, fcntl.F_GETFL)
-            fcntl.fcntl(sys.stdin, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+            fd = sys.stdin.fileno()
+            tty.setcbreak(fd)
+            # Set stdin to non-blocking mode only
+            flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+            fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+            # ensure stdout remains blocking (in case underlying fd inherited)
+            try:
+                outfd = sys.stdout.fileno()
+                oflags = fcntl.fcntl(outfd, fcntl.F_GETFL)
+                if oflags & os.O_NONBLOCK:
+                    fcntl.fcntl(outfd, fcntl.F_SETFL, oflags & ~os.O_NONBLOCK)
+            except Exception:
+                pass
         except Exception:
             pass
 
